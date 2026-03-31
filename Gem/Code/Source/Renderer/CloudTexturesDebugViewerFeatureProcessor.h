@@ -119,7 +119,7 @@ namespace VolumetricClouds
 
         AZ::RHI::DrawListTag m_drawListTag;
         // Common to all CloudTextureInstance(s)
-        AZ::RHI::GeometryView m_commonGeometryView;
+        AZ::RHI::GeometryView m_commonGeometryView{ AZ::RHI::MultiDevice::AllDevices };
 
         AZStd::unordered_map<AZ::EntityId, CloudTextureInstance> m_cloudTextureInstances;
 

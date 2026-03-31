@@ -40,17 +40,17 @@ namespace VolumetricClouds
 
         // The starting frequency for the noiseFBM.
         // We expect a value between 1 and 10.
-        float m_frequency = 4.0;
+        float m_frequency = 4.0f;
 
         int m_perlinOctaves = 7;
-        float m_perlinGain = 0.5504;
+        float m_perlinGain = 0.5504f;
         // The starting amplitude for the perlin FBM.
-        float m_perlinAmplitude = 1.0;
+        float m_perlinAmplitude = 1.0f;
 
         int m_worleyOctaves = 3;
-        float m_worleyGain = 0.45;
+        float m_worleyGain = 0.45f;
         // The starting amplitude for the worley FBM.
-        float m_worleyAmplitude = 0.625;
+        float m_worleyAmplitude = 0.625f;
     };
 
 } // namespace VolumetricClouds

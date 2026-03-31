@@ -39,12 +39,12 @@ namespace VolumetricClouds
 
         // Beer's Law Scattering coefficient. in units [m-1] == [1/m].
         // For clouds it is typically 3x(Absorption coefficient) 0.03[m-1]
-        float m_scatteringCoefficient = 3.0 * DEFAULT_ABSORPTION_COEFFICIENT;
+        float m_scatteringCoefficient = 3.0f * DEFAULT_ABSORPTION_COEFFICIENT;
 
         // Excentricity constant in HenyeyGreenstein phase function. Typically 0.2.
         // A number between [-1,1]. The closer it is to 1.0 the more forward scattering.
         // The closer it is to -1.0 the more backward scattering.
-        float m_henyeyGreensteinG = 0.2;
+        float m_henyeyGreensteinG = 0.2f;
 
         // These are the a, b, c coefficients that will be used
         // to modulate each multi scaterring octave of light contribution

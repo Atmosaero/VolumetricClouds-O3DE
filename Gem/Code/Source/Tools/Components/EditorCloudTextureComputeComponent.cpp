@@ -108,7 +108,7 @@ namespace VolumetricClouds
         BaseClass::Activate();
 
         m_readbackHandler = CloudTexturesComputeFeatureProcessor::ReadbackEvent::Handler(
-            [this](AZ::Data::Instance<AZ::RPI::Image> image,
+            [this](AZ::Data::Instance<AZ::RPI::Image> /*image*/,
                 AZStd::shared_ptr<AZStd::vector<uint8_t>> mipDataBuffer, uint16_t mipSlice, const AZ::RHI::Size& mipSize)
             {
                 if (!m_cloudTextureWriter)
