@@ -83,6 +83,8 @@ namespace VolumetricClouds
 
     void CloudTexturesDebugViewerFeatureProcessor::Deactivate()
     {
+        AZ::TickBus::Handler::BusDisconnect();
+        CloudTextureProviderNotificationBus::MultiHandler::BusDisconnect();
         AZ::Data::AssetBus::Handler::BusDisconnect();
 
         DisableSceneNotification();
@@ -393,11 +395,13 @@ namespace VolumetricClouds
     {
         AZ_Info(LogName, "The shader asset is ready: %s", asset.GetHint().c_str());
         m_shaderAsset = asset;
-        auto activateInternalFunc = [this]()
-        {
-            ActivateInternal();
-        };
-        AZ::TickBus::QueueFunction(AZStd::move(activateInternalFunc));
+        AZ::TickBus::Handler::BusConnect();
+    }
+
+    void CloudTexturesDebugViewerFeatureProcessor::OnTick(float, AZ::ScriptTimePoint)
+    {
+        AZ::TickBus::Handler::BusDisconnect();
+        ActivateInternal();
     }
 
     ////////////////////////////////////////////////////////////////////////

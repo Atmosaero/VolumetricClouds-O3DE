@@ -6,6 +6,7 @@
 */
 
 #pragma once
+#include <AzCore/Component/TickBus.h>
 
 #include <Atom/RPI.Public/Buffer/Buffer.h>
 #include <Atom/RPI.Public/PipelineState.h>
@@ -25,6 +26,7 @@ namespace VolumetricClouds
     class CloudTexturesDebugViewerFeatureProcessor final
         : public AZ::RPI::FeatureProcessor
         , private AZ::Data::AssetBus::Handler
+        , private AZ::TickBus::Handler
         , private CloudTextureProviderNotificationBus::MultiHandler
     {
     public:
@@ -71,6 +73,7 @@ namespace VolumetricClouds
         };
 
         void ActivateInternal();
+        void OnTick(float, AZ::ScriptTimePoint) override;
         void ReloadInstancesSrg();
         void ReloadInstanceSrg(const AZ::RHI::Ptr<AZ::RHI::ShaderResourceGroupLayout>& drawSrgLayout, CloudTextureInstance& cloudTextureInstance);
 

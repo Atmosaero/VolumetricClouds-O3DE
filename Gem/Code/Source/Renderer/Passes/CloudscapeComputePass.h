@@ -69,6 +69,7 @@ namespace VolumetricClouds
         void SetImageAttachmentBinding(uint32_t attachmentIndex, AZ::Data::Instance<AZ::RPI::AttachmentImage> attachmentImage);
     
         bool m_srgNeedsUpdate = true;
+        CloudscapeShaderConstantData m_shaderDataStorage;
         const CloudscapeShaderConstantData* m_shaderConstantData = nullptr;
         uint32_t m_pixelIndex4x4 = 0; // Frame Counter % 16.
 

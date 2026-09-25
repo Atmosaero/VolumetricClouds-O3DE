@@ -137,6 +137,7 @@ namespace VolumetricClouds
 
     void EditorCloudTextureComputeComponent::Deactivate()
     {
+        m_readbackHandler.Disconnect();
         BaseClass::Deactivate();
         AZ::SystemTickBus::Handler::BusDisconnect();
     }

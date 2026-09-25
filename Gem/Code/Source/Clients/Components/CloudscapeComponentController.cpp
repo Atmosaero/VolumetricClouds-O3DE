@@ -156,6 +156,7 @@ namespace VolumetricClouds
                 return;
             }
             m_isActive = true;
+            AZ::TickBus::Handler::BusConnect();
             VolumetricCloudsRequestBus::Handler::BusConnect();
 
             m_entityId = entityId;
@@ -195,10 +196,17 @@ namespace VolumetricClouds
 
             m_prevConfiguration = m_configuration;
             EnableFeatureProcessor();
+            m_weatherUpdatePending = m_configuration.m_weatherMap.IsReady();
+            SubmitShaderConstantData();
 
             auto viewportContextInterface = AZ::Interface<AZ::RPI::ViewportContextRequestsInterface>::Get();
-            auto viewportContext = viewportContextInterface->GetViewportContextByScene(m_scene);
-            AZ::RPI::ViewportContextIdNotificationBus::Handler::BusConnect(viewportContext->GetId());
+            if (viewportContextInterface)
+            {
+                if (auto viewportContext = viewportContextInterface->GetViewportContextByScene(m_scene))
+                {
+                    AZ::RPI::ViewportContextIdNotificationBus::Handler::BusConnect(viewportContext->GetId());
+                }
+            }
 
         }
 
@@ -209,6 +217,10 @@ namespace VolumetricClouds
                 return;
             }
 
+            AZ::TickBus::Handler::BusDisconnect();
+            m_weatherUpdatePending = false;
+            m_resizePending = false;
+            m_isBatchingShaderConstantChanges = false;
             VolumetricCloudsRequestBus::Handler::BusDisconnect();
             AZ::RPI::ViewportContextIdNotificationBus::Handler::BusDisconnect();
             m_directionalLightConfigChangedEventHandler.Disconnect();
@@ -222,6 +234,11 @@ namespace VolumetricClouds
                 m_cloudscapeFeatureProcessor = nullptr;
                 m_scene = nullptr;
             }
+            m_scene = nullptr;
+            m_configuration.m_shaderConstantData.m_lowFrequencyNoiseTexture.reset();
+            m_configuration.m_shaderConstantData.m_highFrequencyNoiseTexture.reset();
+            m_configuration.m_shaderConstantData.m_weatherMap.reset();
+            m_prevConfiguration = m_configuration;
             m_isActive = false;
         }
 
@@ -248,7 +265,7 @@ namespace VolumetricClouds
 
             auto weatherMapAssetId = m_configuration.m_weatherMap.GetId();
             auto prevWeatherMapAssetId = m_prevConfiguration.m_weatherMap.GetId();
-            if (weatherMapAssetId.IsValid() && (weatherMapAssetId != prevWeatherMapAssetId))
+            if (weatherMapAssetId != prevWeatherMapAssetId)
             {
                 AZ::Data::AssetBus::Handler::BusDisconnect();
 
@@ -258,8 +275,13 @@ namespace VolumetricClouds
                 {
                     m_configuration.m_shaderConstantData.m_weatherMap.reset();
                 }
-                AZ::Data::AssetBus::Handler::BusConnect(weatherMapAssetId);
-                m_configuration.m_weatherMap.QueueLoad();
+                m_weatherUpdatePending = false;
+                if (weatherMapAssetId.IsValid())
+                {
+                    AZ::Data::AssetBus::Handler::BusConnect(weatherMapAssetId);
+                    m_configuration.m_weatherMap.QueueLoad();
+                    m_weatherUpdatePending = m_configuration.m_weatherMap.IsReady();
+                }
             }
 
             if (m_cloudscapeFeatureProcessor)
@@ -338,7 +360,11 @@ namespace VolumetricClouds
         {
             if (m_scene)
             {
-                m_cloudscapeFeatureProcessor = m_scene->EnableFeatureProcessor<CloudscapeFeatureProcessor>();
+                m_cloudscapeFeatureProcessor = m_scene->GetFeatureProcessor<CloudscapeFeatureProcessor>();
+                if (!m_cloudscapeFeatureProcessor)
+                {
+                    m_cloudscapeFeatureProcessor = m_scene->EnableFeatureProcessor<CloudscapeFeatureProcessor>();
+                }
             }
 
             AZ_Assert(!!m_cloudscapeFeatureProcessor, "Failed to enable CloudscapeFeatureProcessor");
@@ -371,7 +397,7 @@ namespace VolumetricClouds
             {
                 m_configuration.m_shaderConstantData.m_lowFrequencyNoiseTexture = image;
             }
-            else if (entityId == m_configuration.m_highFreqTextureEntity)
+            if (entityId == m_configuration.m_highFreqTextureEntity)
             {
                 m_configuration.m_shaderConstantData.m_highFrequencyNoiseTexture = image;
             }
@@ -389,26 +415,10 @@ namespace VolumetricClouds
             {
                 AZ_Info(LogName, "The weather map texture asset is ready: %s", asset.GetHint().c_str());
                 m_configuration.m_weatherMap = asset;
-                auto updateTexture = [this]()
-                {
-                    if (m_cloudscapeFeatureProcessor)
-                    {
-                        m_configuration.m_shaderConstantData.m_weatherMap = AZ::RPI::StreamingImage::FindOrCreate(m_configuration.m_weatherMap);
-                        m_cloudscapeFeatureProcessor->UpdateShaderConstantData(m_configuration.m_shaderConstantData);
-                    }
-                };
-                AZ::TickBus::QueueFunction(AZStd::move(updateTexture));
-            } 
-            //else if (m_shaderAsset.GetId() == asset.GetId())
-            //{
-            //    AZ_Info(LogName, "The shader asset is ready: %s", asset.GetHint().c_str());
-            //    m_shaderAsset = asset;
-            //    auto enableFeatureProcessor = [this]()
-            //    {
-            //        EnableFeatureProcessor();
-            //    };
-            //    AZ::TickBus::QueueFunction(AZStd::move(enableFeatureProcessor));
-            //}
+                // TickBus handlers disconnect synchronously on deactivation; no lambda
+                // can outlive the controller or overwrite a newer asset selection.
+                m_weatherUpdatePending = true;
+            }
         }
 
         ////////////////////////////////////////////////////////////////////////
@@ -469,25 +479,40 @@ namespace VolumetricClouds
         }
 
         //! RPI::ViewportContextIdNotificationBus
-        void CloudscapeComponentController::OnViewportSizeChanged([[maybe_unused]] AzFramework::WindowSize size)
+        void CloudscapeComponentController::OnViewportSizeChanged(AzFramework::WindowSize size)
         {
-            // The feature processor owns two image attachments that are used
-            // by the passes it owns. Their sizes must be of the size of the viewport.
-            // Once attachments are defined for a pass they can not be modified (making those changes
-            // is not supported by the APIs at the moment). So we have to reschedule the destruction of this feature processor
-            // and recreate this feature processor which in turns will recreate and add the passes
-            // to the render pipeline.
-            m_scene->DisableFeatureProcessor<CloudscapeFeatureProcessor>();
-            m_cloudscapeFeatureProcessor = nullptr;
-
-            // Recreate the feature processor on the next tick.
-            auto recreateFeatureProcessorFunc = [this]()
+            if (size.m_width && size.m_height)
             {
+                m_resizePending = true;
+            }
+        }
+
+        void CloudscapeComponentController::OnTick(float, AZ::ScriptTimePoint)
+        {
+            if (m_resizePending && m_scene)
+            {
+                m_resizePending = false;
+                if (m_cloudscapeFeatureProcessor)
+                {
+                    m_scene->DisableFeatureProcessor<CloudscapeFeatureProcessor>();
+                    m_cloudscapeFeatureProcessor = nullptr;
+                    // Let Atom remove the old passes before recreating them next tick.
+                    m_resizePending = true;
+                    return;
+                }
                 EnableFeatureProcessor();
                 SubmitShaderConstantData();
-            };
-            AZ::TickBus::QueueFunction(AZStd::move(recreateFeatureProcessorFunc));
-
+            }
+            if (m_weatherUpdatePending)
+            {
+                m_weatherUpdatePending = false;
+                if (m_configuration.m_weatherMap.IsReady())
+                {
+                    m_configuration.m_shaderConstantData.m_weatherMap =
+                        AZ::RPI::StreamingImage::FindOrCreate(m_configuration.m_weatherMap);
+                    SubmitShaderConstantData();
+                }
+            }
         }
 
         /////////////////////////////////////////////////////////

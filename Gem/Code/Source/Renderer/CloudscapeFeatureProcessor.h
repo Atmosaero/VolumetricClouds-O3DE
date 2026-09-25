@@ -19,6 +19,8 @@
 #include <Renderer/CloudTexturePresentationData.h>
 #include <Renderer/Passes/CloudTextureComputeData.h>
 #include <Renderer/CloudscapeShaderConstantData.h>
+#include <Renderer/Passes/CloudscapeComputePass.h>
+#include <Renderer/Passes/CloudscapeRasterPass.h>
 
 class AZ::RPI::Scene;
 
@@ -85,16 +87,23 @@ namespace VolumetricClouds
         // the counter to the Cloudscape passes so they know who is the current frame and who is the
         // previous frame.
         uint32_t m_frameCounter = 0;
+        bool m_resetHistory = true;
+        AZ::Matrix4x4 m_previousCamera = AZ::Matrix4x4::CreateIdentity();
 
         // The passes managed by this feature processor.
-        CloudscapeComputePass* m_cloudscapeComputePass = nullptr;
-        AZ::RPI::ComputePass* m_cloudscapeReprojectionPass = nullptr;
-        CloudscapeRasterPass* m_cloudscapeRenderPass = nullptr;
+        AZ::RPI::Ptr<CloudscapeComputePass> m_cloudscapeComputePass = nullptr;
+        AZ::RPI::Ptr<AZ::RPI::ComputePass> m_cloudscapeReprojectionPass = nullptr;
+        AZ::RPI::Ptr<CloudscapeRasterPass> m_cloudscapeRenderPass = nullptr;
 
         // Shader constants for m_cloudscapeReprojectionPass
         AZ::RHI::ShaderInputNameIndex m_pixelIndex4x4Index = "m_pixelIndex4x4";
+        AZ::RHI::ShaderInputNameIndex m_historyValidIndex = "m_historyValid";
 
-        const CloudscapeShaderConstantData* m_shaderConstantData = nullptr;
+        CloudscapeShaderConstantData m_shaderConstantData;
+        bool m_hasShaderConstantData = false;
+        AZ::RPI::RenderPipeline* m_renderPipeline = nullptr;
+        void OnRenderPipelineRemoved(AZ::RPI::RenderPipeline* pipeline) override;
+        void RemovePasses();
 
         ////////////////////////////////////////////////////
 

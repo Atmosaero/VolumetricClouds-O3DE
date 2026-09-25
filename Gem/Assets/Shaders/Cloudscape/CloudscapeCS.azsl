@@ -247,13 +247,14 @@ ShaderResourceGroup PassSrg : SRG_PerPass
     {
         // Calculate henyeyGreenstein, which needs the cosine of the angle between the view and the
         // direction towards the sun light.
-        const float cosAngle = dot(m_directionTowardsTheSun, viewDirection);
+        const float cosAngle = clamp(dot(m_directionTowardsTheSun, viewDirection), -1.0, 1.0);
+        // The endpoints are delta distributions, not finite HG lobes.
+        g = clamp(g, -0.99, 0.99);
         const float g2 = g * g;
-        #define INV_4PI (1.0/(4*3.141590))
-        // FIXME/TODO: Do Schlick approximation.
+        #define INV_4PI (1.0/(4*3.141592653589793))
         const float denom = 1 + g2 - 2 * g * cosAngle;
-        // We are doing denom*denom*sqrt(denom) instead of pow(denom, 1.5)
-        const float henyeyGreenstein = (1 - g2) / (denom * denom * sqrt(denom)) * INV_4PI;
+        // HG is normalized over the sphere: the denominator is D^(3/2).
+        const float henyeyGreenstein = (1 - g2) / (denom * sqrt(denom)) * INV_4PI;
         return  henyeyGreenstein;
     }
 
@@ -276,7 +277,7 @@ ShaderResourceGroup PassSrg : SRG_PerPass
 // From GPU Pro 7. Chapter 4
 static float Remap(float value, float oldMin, float oldMax, float newMin, float newMax)
 {
-    return (((value - oldMin) / (oldMax - oldMin)) * (newMax - newMin)) + newMin;
+    return (((value - oldMin) / max(oldMax - oldMin, 0.000001)) * (newMax - newMin)) + newMin;
 }
 
 
@@ -361,7 +362,7 @@ float SampleCloudDensity(float3 worldPosKm, float uvwScale, float mipLevel, floa
 // 3- From GPU Pro 7. Real-Time Voumetric Cloudscapes.
 //    a. Use cone sampling of increasing radius.
 //    b. Powder Sugar effect.
-float3 GetMultiScatteredLuminance(float3 rayWorldPosKm, float stepSizeKm, float3 viewDirection)
+float3 GetMultiScatteredLuminance(float3 rayWorldPosKm, float3 viewDirection)
 {
     // REMARK: On an NVDIA 4090 RTX, at 2560x1440 resolution I benchmarked at different
     // light integration steps:
@@ -396,8 +397,11 @@ float3 GetMultiScatteredLuminance(float3 rayWorldPosKm, float stepSizeKm, float3
         float3(-0.40700059, -0.25467177, -0.87720739),
     };
 
-    float3 samplePosKm = rayWorldPosKm;
-    float rayStepSizeKm = stepSizeKm;
+    // A fixed world-space shadow budget, independent of the camera ray's step count.
+    // Six growing, non-overlapping segments span one cloud-layer thickness.
+    const float shadowDistanceKm = PassSrg::m_cloudSlabThicknessKm;
+    const float baseShadowStepKm = shadowDistanceKm / float((1 << NUM_LIGHT_SAMPLES) - 1);
+    float segmentStartKm = 0.0;
     const float3 directionTowardsTheSun = PassSrg::m_directionTowardsTheSun;
 
 	float opticalDepth = 0;
@@ -411,10 +415,11 @@ float3 GetMultiScatteredLuminance(float3 rayWorldPosKm, float stepSizeKm, float3
 	{
 
         const float3 randomDirection = normalize(directionTowardsTheSun + NOISE_KERNEL[stepIdx] * 0.1);
-        const float lightStepDistance = rayStepSizeKm * distanceMultipler;
-		float3 posInConeKm = rayWorldPosKm + randomDirection * lightStepDistance;
+        const float lightStepDistance = baseShadowStepKm * distanceMultipler;
+        const float sampleDistanceKm = segmentStartKm + 0.5 * lightStepDistance;
+		float3 posInConeKm = rayWorldPosKm + randomDirection * sampleDistanceKm;
         float heightFraction = PassSrg::GetHeightFraction(posInConeKm);
-		if(heightFraction <= 1.00)
+		if(heightFraction >= 0.0 && heightFraction <= 1.0)
 		{
             // Only if we are inside the cloud formation spherical slab, we'll do calculations. 
 			// Always sample cheaply.
@@ -425,7 +430,8 @@ float3 GetMultiScatteredLuminance(float3 rayWorldPosKm, float stepSizeKm, float3
 			}
 		}
 
-        distanceMultipler *= 2; // Doubling at each step makes a huge difference.
+        segmentStartKm += lightStepDistance;
+        distanceMultipler *= 2;
         mipLevel += 1.0;
 	}
 
@@ -670,7 +676,7 @@ float4 GetCloudColor(const float2 pixUV, const float2 pixLoc)
         float stepTransmittance = exp(-eCoef * sampledCloudDensity * stepSizeKm);
 
         // Calculate the Light Energy that arrives as this point in the raymarch.
-        const float3 luminance = GetMultiScatteredLuminance(rayWorldPosKm, stepSizeKm, rayDirection) + PassSrg::GetAmbientLightColor(heightFraction);
+        const float3 luminance = GetMultiScatteredLuminance(rayWorldPosKm, rayDirection) + PassSrg::GetAmbientLightColor(heightFraction);
 
         // The frostbite trick for better integration.
         float3 integScatt = (luminance - luminance * stepTransmittance) / eCoef;
@@ -732,7 +738,7 @@ void MainCS(uint3 thread_id: SV_DispatchThreadID)
     // Do nothing if we are outside the target texture dimensions.
     uint2 texDims;
     PassSrg::m_cloudscapeOut[0].GetDimensions(texDims.x, texDims.y);
-    if ((pixelLoc.x >= texDims.x) || (pixelLoc.y >= texDims.y))
+    if ((thread_id.x * 4 >= texDims.x) || (thread_id.y * 4 >= texDims.y))
     {
         return;
     }
@@ -747,7 +753,8 @@ void MainCS(uint3 thread_id: SV_DispatchThreadID)
     //     return;
     // }
 
-    float2 pixelLocF = float2(pixelLoc);
+    pixelLoc = min(pixelLoc, texDims - 1);
+    float2 pixelLocF = float2(pixelLoc) + 0.5;
     float2 pixelUV = pixelLocF / float2(texDims);
     float4 cloudColor = GetCloudColor(pixelUV, pixelLocF);
     

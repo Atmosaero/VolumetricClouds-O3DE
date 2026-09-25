@@ -50,6 +50,8 @@ namespace VolumetricClouds
                                    TextureReadyEvent::Handler& readyHandler,
                                    ReadbackEvent::Handler* readbackHandler = nullptr);
 
+        void CancelComputeRequest(const AZ::EntityId& entityId);
+
         struct CloudTextureComputeRequest
         {
             // When true, the dispatched compute pipeline will also
@@ -79,7 +81,7 @@ namespace VolumetricClouds
         static constexpr char LogName[] = "CloudTexturesComputeFeatureProcessor";
 
         AZ::Data::Instance<AZ::RPI::AttachmentImage> CreateTexture3DAttachmentImage(uint32_t pixelSize);
-        AZStd::shared_ptr<CloudTextureComputePipeline> CreateTextureComputeTask(CloudTextureComputeRequest& cloudTextureInstance);
+        AZStd::shared_ptr<CloudTextureComputePipeline> CreateTextureComputeTask(AZStd::shared_ptr<CloudTextureComputeRequest> request);
 
         //////////////////////////////////////////////////////////////////
         //! AZ::RPI::FeatureProcessor overrides START...
@@ -93,7 +95,7 @@ namespace VolumetricClouds
 
         static constexpr const char* FeatureProcessorName = "CloudTexturesComputeFeatureProcessor";
 
-        AZStd::unordered_map<AZ::EntityId, CloudTextureComputeRequest> m_computeRequests;
+        AZStd::unordered_map<AZ::EntityId, AZStd::shared_ptr<CloudTextureComputeRequest>> m_computeRequests;
 
         // When a new CloudTextureComputeRequest is created, we add the entityid in this queue.
         // Periodically we check if there's an entity at the front of the queue. If there's
@@ -111,6 +113,18 @@ namespace VolumetricClouds
         // each time a CloudTextureComputePipeline all other feature processors in the main scene would be notified
         // and it spawns a mess of notifications that are not relevant to the other feature processors.
         AZ::RPI::ScenePtr m_computeScene;
+        struct CachedTexture
+        {
+            CloudTextureComputeData m_data;
+            AZ::Data::Instance<AZ::RPI::AttachmentImage> m_image;
+            size_t m_bytes = 0;
+        };
+        // Scene-local, bounded cache. Editor/game transitions can share the exact
+        // same noise settings without dispatching the expensive generator again.
+        AZStd::deque<CachedTexture> m_textureCache;
+        size_t m_cachedBytes = 0;
+        static constexpr size_t TextureCacheBudget = 32 * 1024 * 1024;
+
 
     };
 } // namespace VolumetricClouds

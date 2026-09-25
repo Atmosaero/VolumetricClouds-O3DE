@@ -9,6 +9,7 @@
 
 #include <AzCore/Component/Component.h>
 #include <AzCore/Component/TransformBus.h>
+#include <AzCore/Component/TickBus.h>
 
 #include <Atom/RPI.Public/ViewportContextBus.h>
 #include <Atom/RPI.Reflect/Image/StreamingImageAsset.h>
@@ -57,6 +58,7 @@ namespace VolumetricClouds
         , private AZ::Data::AssetBus::Handler
         , private AZ::TransformNotificationBus::Handler // To detect changes in Sun direction.
         , private AZ::RPI::ViewportContextIdNotificationBus::Handler
+        , private AZ::TickBus::Handler
         , public VolumetricCloudsRequestBus::Handler
     {
     public:
@@ -152,6 +154,9 @@ namespace VolumetricClouds
 
         //! RPI::ViewportContextIdNotificationBus
         void OnViewportSizeChanged(AzFramework::WindowSize size) override;
+        void OnTick(float deltaTime, AZ::ScriptTimePoint time) override;
+        bool m_weatherUpdatePending = false;
+        bool m_resizePending = false;
 
         // This boolean was added so only one Volumetric Cloudscape component is active per level.
         bool m_isActive = false;
@@ -165,7 +170,7 @@ namespace VolumetricClouds
         CloudscapeComponentConfig m_configuration;
         CloudscapeComponentConfig m_prevConfiguration;
 
-        AZ::RPI::Scene* m_scene; //Cache a reference to the scene where @m_entityId exists.
+        AZ::RPI::Scene* m_scene = nullptr; //Cache a reference to the scene where @m_entityId exists.
         CloudscapeFeatureProcessor* m_cloudscapeFeatureProcessor = nullptr;
 
         AZ::Render::DirectionalLightConfigurationChangedEvent::Handler m_directionalLightConfigChangedEventHandler;

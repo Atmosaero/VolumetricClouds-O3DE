@@ -50,8 +50,10 @@ namespace VolumetricClouds
         incompatible.push_back(AZ_CRC_CE("VolumetricCloudsService"));
     }
 
-    void VolumetricCloudsSystemComponent::GetRequiredServices([[maybe_unused]] AZ::ComponentDescriptor::DependencyArrayType& required)
+    void VolumetricCloudsSystemComponent::GetRequiredServices(AZ::ComponentDescriptor::DependencyArrayType& required)
     {
+        // Activate() registers passes with the pass system owned by RPI.
+        required.push_back(AZ_CRC_CE("RPISystem"));
     }
 
     void VolumetricCloudsSystemComponent::GetDependentServices([[maybe_unused]] AZ::ComponentDescriptor::DependencyArrayType& dependent)

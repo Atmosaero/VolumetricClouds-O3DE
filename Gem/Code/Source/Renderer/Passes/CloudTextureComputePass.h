@@ -43,7 +43,7 @@ namespace VolumetricClouds
         // Must be called before the pipeline that owns this pass runs.
         // Returns true (success) if the size of the texture3DAttachment is within the limits, etc.
         bool SetRenderData(AZ::Data::Instance<AZ::RPI::AttachmentImage> texture3DAttachment,
-                           CloudTextureComputeData computeData);
+                           CloudTextureComputeData computeData, uint16_t mipLevel = 0);
         bool IsFinished() { return m_isFinished; }
 
         //! Besides the standard enable flag,
@@ -77,6 +77,9 @@ namespace VolumetricClouds
         AZ::RHI::ShaderInputNameIndex m_worleyAmplitudeIndex = "m_worleyAmplitude";
         AZ::RHI::ShaderInputNameIndex m_pixelSizeIndex = "m_pixelSize";
 
+
+        AZ::RHI::ShaderInputNameIndex m_mipLevelIndex = "m_mipLevel";
+        uint16_t m_mipLevel = 0;
 
         // This pass runs in one frame, and when done this becomes true.
         bool m_isFinished = false;

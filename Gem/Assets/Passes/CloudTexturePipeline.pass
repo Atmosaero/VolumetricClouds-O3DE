@@ -10,6 +10,34 @@
                 {
                     "Name": "CloudTextureComputePass",
                     "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip1",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip2",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip3",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip4",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip5",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip6",
+                    "TemplateName": "CloudTextureComputePassTemplate"
+                },
+                {
+                    "Name": "CloudTextureMip7",
+                    "TemplateName": "CloudTextureComputePassTemplate"
                 }
             ]
         }

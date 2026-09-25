@@ -6,6 +6,7 @@
 */
 
 #pragma once
+#include <AzCore/Component/TickBus.h>
 
 #include <AzCore/Component/Component.h>
 #include <AzCore/Component/TransformBus.h>
@@ -46,6 +47,7 @@ namespace VolumetricClouds
         : private AZ::TransformNotificationBus::Handler
         , public CloudTextureProviderRequestBus::Handler
         , private AZ::Data::AssetBus::Handler
+        , private AZ::TickBus::Handler
     {
     public:
         friend class EditorCloudTextureAssetComponent;
@@ -84,6 +86,8 @@ namespace VolumetricClouds
         void OnAssetStateChanged(AZ::Data::Asset<AZ::Data::AssetData> asset, bool isReload);
 
         void OnConfigurationChanged();
+        void OnTick(float, AZ::ScriptTimePoint) override;
+        bool m_textureUpdatePending = false;
 
         CloudTexturesDebugViewerFeatureProcessor* GetDebugViewerFeatureProcessor();
     

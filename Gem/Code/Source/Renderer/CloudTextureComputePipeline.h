@@ -10,6 +10,7 @@
 #include <Atom/RPI.Public/Base.h>
 #include <Atom/RPI.Public/Scene.h>
 #include <Atom/RPI.Public/Pass/AttachmentReadback.h>
+#include <AzCore/std/parallel/atomic.h>
 
 #include <Renderer/Passes/CloudTextureComputeData.h>
 
@@ -18,7 +19,7 @@ namespace VolumetricClouds
     class CloudTextureComputePass;
     
     // This class generates a 3D noise texture used for clouds. The Texture3D
-    // is generated along with all of its mipmap levels, all in a single pass.
+    // is generated along with filtered mip levels in ordered passes within one frame.
     // This class instantiates a minimal render pipeline, which in turn instantiates
     // the CloudTextureComputePass to generate the Texture3D, optionally you can
     // enable an AttachmentReadback pass to read the Texture3D into CPU memory.
@@ -46,6 +47,7 @@ namespace VolumetricClouds
         // removes the render pipeline from the scene if rendering is complete
         // Note: must be called outside of the feature processor Simulate/Render phases
         void CheckAndRemovePipeline();
+        void Cancel();
     
         bool IsRenderingNoiseTexture() const { return m_isRendering; }
     
@@ -53,8 +55,11 @@ namespace VolumetricClouds
         AZ_DISABLE_COPY_MOVE(CloudTextureComputePipeline);
 
         void SetupAttachmentReadback(uint32_t pixelSize);
-        // resultNoMips will be cast to  AZ::RPI::AttachmentsReadbackGroup::ReadbackResultWithMips
-        void AttachmentReadbackCallback(const AZ::RPI::AttachmentReadback::ReadbackResult& resultNoMips);
+        struct ReadbackState
+        {
+            AZStd::vector<CloudTextureSubresourceReadback> m_data;
+            AZStd::atomic_bool m_complete{false};
+        };
 
         static constexpr char PipelineDescriptorAssetPath[] = "Passes/CloudTexturePipelineDescriptor.azasset";
         static constexpr char LogName[] = "CloudTextureComputePipeline";
@@ -68,8 +73,7 @@ namespace VolumetricClouds
         CloudTextureRenderCallback m_callback;
         bool m_isRendering = false;
         AZStd::shared_ptr<AZ::RPI::AttachmentReadback> m_attachmentsReadback;
-        // This vector will be as long as the number of expected mip maps.
-        AZStd::vector<CloudTextureSubresourceReadback> m_attachmentsReadbackData;
-        bool m_isReadbackComplete = false;
+        // The worker callback owns this state independently of the pipeline.
+        AZStd::shared_ptr<ReadbackState> m_readbackState;
     };
 } // namespace VolumetricClouds

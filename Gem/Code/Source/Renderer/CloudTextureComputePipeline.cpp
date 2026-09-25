@@ -30,8 +30,11 @@ namespace VolumetricClouds
             return 0;
         }
     
-        m_isRendering = true;
-        m_callback = callback;
+        m_callback = AZStd::move(callback);
+        if (!m_scene || !texture3DAttachment)
+        {
+            return 0;
+        }
 
         AZ::Data::Asset<AZ::RPI::AnyAsset> pipelineAsset = AZ::RPI::AssetUtils::LoadAssetByProductPath<AZ::RPI::AnyAsset>(PipelineDescriptorAssetPath, AZ::RPI::AssetUtils::TraceLevel::Error);
         if (!pipelineAsset.IsReady())
@@ -54,29 +57,31 @@ namespace VolumetricClouds
         renderPipelineDescriptor.m_name = AZStd::string::format("CloudTexturePipeline_%u", m_renderTaskId);
 
         AZ::RPI::RenderPipelinePtr renderPipeline = AZ::RPI::RenderPipeline::CreateRenderPipeline(renderPipelineDescriptor);
+        if (!renderPipeline)
+        {
+            return 0;
+        }
         m_renderPipelineId = renderPipeline->GetId();
 
-        // Hold a reference to the compute pass
-        const auto passName = AZ::Name("CloudTextureComputePass");
-        AZ::RPI::PassFilter passFilter = AZ::RPI::PassFilter::CreateWithPassName(passName, renderPipeline.get());
-        AZ::RPI::Pass* existingPass = AZ::RPI::PassSystemInterface::Get()->FindFirstPass(passFilter);
-        m_textureComputePass = azrtti_cast<CloudTextureComputePass*>(existingPass);
-        if (!m_textureComputePass)
+        // Separate scopes are required: a dispatch-wide barrier cannot synchronize
+        // mip generation across thread groups. The last pass owns completion/readback.
+        const uint16_t mipCount = CloudTextureComputePass::CalculateMipCount(computeData.m_pixelSize);
+        for (uint16_t mip = 0; mip < mipCount; ++mip)
         {
-            AZ_Error(LogName, false, "%s Failed to find pass: %s", __FUNCTION__, passName.GetCStr());
-            return 0;
+            const AZ::Name passName(mip == 0 ? AZStd::string("CloudTextureComputePass") : AZStd::string::format("CloudTextureMip%u", mip));
+            const auto filter = AZ::RPI::PassFilter::CreateWithPassName(passName, renderPipeline.get());
+            auto pass = azrtti_cast<CloudTextureComputePass*>(AZ::RPI::PassSystemInterface::Get()->FindFirstPass(filter));
+            if (!pass || !pass->SetRenderData(texture3DAttachment, computeData, mip))
+            {
+                AZ_Error(LogName, false, "Failed to initialize noise mip pass %s", passName.GetCStr());
+                return 0;
+            }
+            m_textureComputePass = pass;
         }
-        m_textureComputePass->SetEnabled(false);
-        // If the data is correct, SetRenderData() will enable the Pass.
-        if (!m_textureComputePass->SetRenderData(texture3DAttachment, computeData))
-        {
-            AZ_Assert(false, "Failed to set render data for CloudTexturePipeline with name %s", renderPipelineDescriptor.m_name.c_str());
-            AZ_Error(LogName, false, "Failed to set render data for CloudTexturePipeline with name %s", renderPipelineDescriptor.m_name.c_str());
-            return 0;
-        }
-    
+
         // Add the pipeline to the scene
         m_scene->AddRenderPipeline(renderPipeline);
+        m_isRendering = true;
 
         if (withAttachmentReadback)
         {
@@ -89,14 +94,19 @@ namespace VolumetricClouds
     
     void CloudTextureComputePipeline::CheckAndRemovePipeline()
     {
-        if (m_textureComputePass && m_textureComputePass->IsFinished())
+        if (m_isRendering && m_textureComputePass && m_textureComputePass->IsFinished())
         {
-            if (m_attachmentsReadback && !m_isReadbackComplete)
+            if (m_readbackState && !m_readbackState->m_complete.load(AZStd::memory_order_acquire))
             {
                 return;
             }
 
-            m_callback(m_renderTaskId, m_attachmentsReadbackData);
+            auto callback = AZStd::move(m_callback);
+            if (callback)
+            {
+                const AZStd::vector<CloudTextureSubresourceReadback> empty;
+                callback(m_renderTaskId, m_readbackState ? m_readbackState->m_data : empty);
+            }
 
             m_isRendering = false;
     
@@ -104,46 +114,53 @@ namespace VolumetricClouds
             // Note: this must not be called in the scope of a feature processor Simulate or Render to avoid a race condition with other feature processors
             m_scene->RemoveRenderPipeline(m_renderPipelineId);
             m_attachmentsReadback.reset();
+            m_readbackState.reset();
             m_textureComputePass = nullptr;
         }
     }
 
-    void CloudTextureComputePipeline::AttachmentReadbackCallback(const AZ::RPI::AttachmentReadback::ReadbackResult& result)
+    void CloudTextureComputePipeline::Cancel()
     {
-        AZ_Assert(result.m_userIdentifier == m_renderTaskId, "Got unexpected user identifier <%u>. Was expecting <%u>.", result.m_userIdentifier, m_renderTaskId);
-
-        for (const auto& mipDataBuffer : result.m_mipDataBuffers)
+        m_callback = {};
+        if (m_isRendering && m_scene)
         {
-            const auto mipIdx = mipDataBuffer.m_mipInfo.m_slice;
-            m_attachmentsReadbackData[mipIdx].m_dataBuffer = mipDataBuffer.m_mipBuffer;
-            m_attachmentsReadbackData[mipIdx].m_mipSlice = mipIdx;
-            m_attachmentsReadbackData[mipIdx].m_mipSize = mipDataBuffer.m_mipInfo.m_size;
+            m_scene->RemoveRenderPipeline(m_renderPipelineId);
         }
-
-        m_isReadbackComplete = true;
+        m_isRendering = false;
+        m_textureComputePass = nullptr;
+        m_attachmentsReadback.reset();
+        m_readbackState.reset();
+        m_scene = nullptr;
     }
 
     void CloudTextureComputePipeline::SetupAttachmentReadback(uint32_t pixelSize)
     {
         AZStd::fixed_string<128> scope_name = AZStd::fixed_string<128>::format("Texture3DCapture_%u", m_renderTaskId);
         m_attachmentsReadback = AZStd::make_shared<AZ::RPI::AttachmentReadback>(AZ::RHI::ScopeId{ scope_name });
-        m_attachmentsReadback->SetCallback(AZStd::bind(&CloudTextureComputePipeline::AttachmentReadbackCallback, this, AZStd::placeholders::_1));
+        m_readbackState = AZStd::make_shared<ReadbackState>();
+        m_attachmentsReadback->SetCallback([state = m_readbackState](const AZ::RPI::AttachmentReadback::ReadbackResult& result)
+        {
+            for (const auto& mip : result.m_mipDataBuffers)
+            {
+                state->m_data.push_back({mip.m_mipBuffer, mip.m_mipInfo.m_slice, mip.m_mipInfo.m_size});
+            }
+            state->m_complete.store(true, AZStd::memory_order_release);
+        });
         m_attachmentsReadback->SetUserIdentifier(m_renderTaskId);
 
-        m_isReadbackComplete = false;
         AZ::Name slotName("OutputMip0");
 
         const auto mipsCount = CloudTextureComputePass::CalculateMipCount(pixelSize);
-        m_attachmentsReadbackData.reserve(mipsCount);
-        for (uint16_t i = 0; i < mipsCount; i++)
-        {
-            m_attachmentsReadbackData.push_back({});
-        }
         const uint16_t mipSliceMax = mipsCount - 1;
         AZ::RHI::ImageSubresourceRange mipsRange(0 /*mipSliceMin*/, mipSliceMax, 0, 0);
         const bool result = m_textureComputePass->ReadbackAttachment(m_attachmentsReadback, m_renderTaskId,
             slotName, AZ::RPI::PassAttachmentReadbackOption::Output, &mipsRange);
         AZ_Error(LogName, result, "%s Failed to initialize ReadbackAttachment\n", __FUNCTION__);
+        if (!result)
+        {
+            m_attachmentsReadback.reset();
+            m_readbackState.reset();
+        }
     }
     
 } // namespace VolumetricClouds

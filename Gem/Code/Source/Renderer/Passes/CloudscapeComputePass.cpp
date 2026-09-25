@@ -31,6 +31,7 @@ namespace VolumetricClouds
     CloudscapeComputePass::CloudscapeComputePass(const AZ::RPI::PassDescriptor& descriptor)
         : AZ::RPI::ComputePass(descriptor)
     {
+        SetEnabled(false);
     }
 
     CloudscapeComputePass::~CloudscapeComputePass()
@@ -146,7 +147,12 @@ namespace VolumetricClouds
            ambientLightColorAndIntensity.SetA(m_shaderConstantData->m_ambientLightIntensity);
            m_shaderResourceGroup->SetConstant(m_ambientLightColorAndIntensityIndex, ambientLightColorAndIntensity);
            
-           m_shaderResourceGroup->SetConstant(m_directionTowardsTheSunIndex, m_shaderConstantData->m_directionTowardsTheSun);
+           auto sunDirection = m_shaderConstantData->m_directionTowardsTheSun.GetNormalizedSafe();
+           if (sunDirection.IsZero())
+           {
+               sunDirection = AZ::Vector3::CreateAxisZ();
+           }
+           m_shaderResourceGroup->SetConstant(m_directionTowardsTheSunIndex, sunDirection);
 
            // The user inputs the data in [m-1], but the shader assumes all the data is computed in Km.
            const float absorptionCoefficient = m_shaderConstantData->m_cloudMaterialProperties.m_absorptionCoefficient * (1000.0f); //* 10.0f);
@@ -196,12 +202,14 @@ namespace VolumetricClouds
             !shaderData.m_highFrequencyNoiseTexture ||
             !shaderData.m_weatherMap)
         {
+            m_shaderDataStorage = {};
             m_shaderConstantData = nullptr;
             SetEnabled(false);
         }
         else
         {
-            m_shaderConstantData = &shaderData;
+            m_shaderDataStorage = shaderData;
+            m_shaderConstantData = &m_shaderDataStorage;
             m_srgNeedsUpdate = true;
             if (!IsEnabled())
             {

@@ -49,43 +49,32 @@ namespace VolumetricClouds
             return;
         }
 
-        const auto pixelSize = m_computeData.m_pixelSize;
-        // Based on the pixelSize we can calculate all the mips.
-        const uint16_t numMips = CalculateMipCount(pixelSize);
-        uint16_t pixelSizeForMip = static_cast<uint16_t>(pixelSize);
-        const auto shaderInputName = AZ::Name("m_cloudTextureMips");
-        for (uint16_t mipIndex = 0; mipIndex < numMips; mipIndex++)
+        const uint32_t mipSize = m_computeData.m_pixelSize >> m_mipLevel;
+        auto output = FindAttachmentBinding(AZ::Name("OutputMip0"));
+        AZ_Assert(output, "Missing noise output slot");
+        output->m_shaderInputName = AZ::Name("m_outputMip");
+        output->m_unifiedScopeDesc.SetAsImage(AZ::RHI::ImageViewDescriptor::Create3D(
+            m_texture3DAttachment->GetDescriptor().m_format, m_mipLevel, m_mipLevel, 0, static_cast<uint16_t>(mipSize - 1)));
+        AttachImageToSlot(AZ::Name("OutputMip0"), m_texture3DAttachment);
+
+        if (m_mipLevel > 0)
         {
-            const AZStd::string slotNameStr = AZStd::string::format("OutputMip%u", mipIndex);
-            const auto slotName = AZ::Name(slotNameStr);
-            auto binding = FindAttachmentBinding(slotName);
-            if (!binding)
-            {
-                AZ_Warning(LogName, false, "Failed to find binding for slot %s", slotName.GetCStr());
-                return;
-            }
-
-            // By default, in the *.pass asset we have it as "NoBind" because during asset load time
-            // we have no attachments. Attachments are actually created and defined at runtime by the CloudTextureFeatureProcessor.
-            // Now that we know what the attachment should be, it is time to define the real shader constant name.
-            // REMARK:
-            // The real reason in the *.pass asset we start with "NoBind" is to avoid
-            // harmless AZ::Errors related with the shaders m_cloudTextureMips[]
-            // array binding. The bindings are actually known at runtime and not during
-            // AZ::RPI::RenderPass::InitializeInternal().
-            binding->m_shaderInputName = shaderInputName;
-
-            // Make sure the imageView points to the correct mip level.
-            AZ::RHI::ImageViewDescriptor viewDesc = AZ::RHI::ImageViewDescriptor::Create3D(m_texture3DAttachment->GetDescriptor().m_format,
-                mipIndex, mipIndex, 0, pixelSizeForMip - 1);
-            binding->m_unifiedScopeDesc.SetAsImage(viewDesc);
-
-            AttachImageToSlot(slotName, m_texture3DAttachment);
-
-            pixelSizeForMip = (pixelSizeForMip >> 1);
+            // Only filtering passes have a source. Mip 0 and unused passes must
+            // not declare an unbound required input in pass validation.
+            AZ::RPI::PassSlot inputSlot;
+            inputSlot.m_name = AZ::Name("InputMip");
+            inputSlot.m_slotType = AZ::RPI::PassSlotType::Input;
+            inputSlot.m_scopeAttachmentUsage = AZ::RHI::ScopeAttachmentUsage::Shader;
+            inputSlot.m_shaderInputName = AZ::Name("m_sourceMip");
+            AddAttachmentBinding(AZ::RPI::PassAttachmentBinding(inputSlot));
+            auto input = FindAttachmentBinding(AZ::Name("InputMip"));
+            AZ_Assert(input, "Missing noise input slot");
+            input->m_shaderInputName = AZ::Name("m_sourceMip");
+            input->m_unifiedScopeDesc.SetAsImage(AZ::RHI::ImageViewDescriptor::Create3D(
+                m_texture3DAttachment->GetDescriptor().m_format, m_mipLevel - 1, m_mipLevel - 1, 0, static_cast<uint16_t>(mipSize * 2 - 1)));
+            AttachImageToSlot(AZ::Name("InputMip"), m_texture3DAttachment);
         }
-
-        SetTargetThreadCounts(pixelSize, pixelSize, pixelSize);
+        SetTargetThreadCounts(mipSize, mipSize, mipSize);
     }
 
     void CloudTextureComputePass::FrameBeginInternal(FramePrepareParams params)
@@ -118,7 +107,10 @@ namespace VolumetricClouds
         // AND if the pass owns the persistent attachment the Import and Use are done automatically
         // by the base Pass class SetupFrameGraphDependencies.
         AZ::RHI::FrameGraphAttachmentInterface attachmentDatabase = frameGraph.GetAttachmentDatabase();
-        attachmentDatabase.ImportImage(m_texture3DAttachment->GetAttachmentId(), m_texture3DAttachment->GetRHIImage());
+        if (!attachmentDatabase.IsAttachmentValid(m_texture3DAttachment->GetAttachmentId()))
+        {
+            attachmentDatabase.ImportImage(m_texture3DAttachment->GetAttachmentId(), m_texture3DAttachment->GetRHIImage());
+        }
 
         // REMARK:
         // Commented this block because it is redundant because AZ::RPI::ComputePass::SetupFrameGraphDependencies
@@ -152,6 +144,7 @@ namespace VolumetricClouds
             m_shaderResourceGroup->SetConstant(m_worleyAmplitudeIndex, computeData.m_worleyAmplitude);
 
             m_shaderResourceGroup->SetConstant(m_pixelSizeIndex, computeData.m_pixelSize);
+            m_shaderResourceGroup->SetConstant(m_mipLevelIndex, uint32_t(m_mipLevel));
 
         }
         AZ::RPI::ComputePass::CompileResources(context);
@@ -168,7 +161,7 @@ namespace VolumetricClouds
     }
 
     bool CloudTextureComputePass::SetRenderData(AZ::Data::Instance<AZ::RPI::AttachmentImage> texture3DAttachment,
-        CloudTextureComputeData computeData)
+        CloudTextureComputeData computeData, uint16_t mipLevel)
     {
         if (m_isFinished)
         {
@@ -177,7 +170,7 @@ namespace VolumetricClouds
         }
 
         const auto pixelSize = computeData.m_pixelSize;
-        if ( (pixelSize < MIN_PIXEL_SIZE) || (pixelSize > MAX_PIXEL_SIZE) )
+        if (!texture3DAttachment || pixelSize < MIN_PIXEL_SIZE || pixelSize > MAX_PIXEL_SIZE || (pixelSize & (pixelSize - 1)) != 0)
         {
             AZ_Error(LogName, false, "This pass can not generate noise textures smaller than %u or larger than %u pixels. Got %u pixels.\n",
                 MIN_PIXEL_SIZE, MAX_PIXEL_SIZE, pixelSize);
@@ -187,7 +180,7 @@ namespace VolumetricClouds
         // Make sure the Texture3D was memory allocated properly (with expected MipMap count, etc).
         const auto expectedMipsCount = CalculateMipCount(pixelSize);
         const auto &imageDesc = texture3DAttachment->GetDescriptor();
-        if (imageDesc.m_mipLevels != expectedMipsCount)
+        if (imageDesc.m_mipLevels != expectedMipsCount || mipLevel >= expectedMipsCount)
         {
             AZ_Error(LogName, false, "For pixel size %u, Expected Mips count %u in attachment image don't match. Got %u\n",
                 pixelSize, expectedMipsCount, imageDesc.m_mipLevels);
@@ -196,6 +189,7 @@ namespace VolumetricClouds
 
         m_texture3DAttachment = texture3DAttachment;
         m_computeData = computeData;
+        m_mipLevel = mipLevel;
 
         SetEnabled(true);
         return true;

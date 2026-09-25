@@ -18,6 +18,7 @@ ShaderResourceGroup PassSrg : SRG_PerPass
     // A number from 0 .. 15. Defines the pixel index
     // within each 4x4 block that will be ray marched in this frame. 
     uint m_pixelIndex4x4;
+    uint m_historyValid;
 
     // We write to only one of these two textures every other frame.
     RWTexture2D<float4> m_cloudscapeTexture[2];
@@ -39,74 +40,42 @@ ShaderResourceGroup PassSrg : SRG_PerPass
         return uint2(colIdx, rowIdx);
     }
 
-    bool IsRayMarchedPixel(uint2 pixelLoc)
+    uint2 GetRayMarchedPixelLocation(uint2 pixelLoc, uint2 screenDims)
     {
-        // 1280 x 720
-        // 1280 / 4 = 320
-        // 720 / 4 = 180
-
-        // 323 x 72
-        // 323 / 4 = 80.75
-        //    80 * 4 = 320. ModX = 3
-        // 72 / 4 = 18
-        //    18 * 4 = 72. ModY = 0
-        // pixelIndex4x4 = ModY * 4 + ModX = 0 * 4 + 3 = 3
-
-        // 323 x 74
-        // 323 / 4 = 80.75
-        //    80 * 4 = 320  . ModX = 3
-        // 74 / 4 = 18.5
-        //    18 * 4 = 72. ModY = 2
-        // pixelIndex4x4 = ModY * 4 + ModX = 2 * 4 + 3 = 11
-
-        //     320, 321, 322, 323
-        //  72   0    1    2    3
-        //  73   4    5    6    7
-        //  74   8    9   10   11
-        //  75  12   13   14   15  
-
-        const uint blockX = pixelLoc.x >> 2;
-        const uint modX = pixelLoc.x - (blockX * 4);
-        const uint blockY = pixelLoc.y >> 2;
-        const uint modY = pixelLoc.y - (blockY * 4);
-
-        const uint pixelIndex4x4 = modY * 4 + modX;
-        const uint transformedPixelIndex4x4 = GetTransformed4x4PixelIndex(m_pixelIndex4x4);
-        
-        return pixelIndex4x4 == transformedPixelIndex4x4;
+        return min((pixelLoc / 4) * 4 + GetPixelBlockXY(), screenDims - 1);
     }
 
-
-    uint2 GetRayMarchedPixelLocation(uint2 pixelLoc)
+    bool GetPreviousPixel(uint2 pixelLoc, uint2 screenDims, out float2 previousPixel)
     {
-        const uint blockX = pixelLoc.x >> 2;
-        const uint blockY = pixelLoc.y >> 2;
-        return uint2(blockX << 2, blockY << 2) + GetPixelBlockXY();
+        const float2 uv = (float2(pixelLoc) + 0.5) / float2(screenDims);
+        // Clouds are distant sky, so geometry depth must not distort their
+        // history at silhouettes. Transform a direction (w=0), never a point
+        // reconstructed at reverse-depth zero, which may be at infinity.
+        const float4 positionVS = mul(ViewSrg::m_projectionMatrixInverse,
+            float4(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0, 0.5, 1.0));
+        const float3 directionWS = mul(ViewSrg::m_viewMatrixInverse,
+            float4(positionVS.xyz / positionVS.w, 0.0)).xyz;
+        const float4 previousClip = mul(ViewSrg::m_viewProjectionPrevMatrix, float4(directionWS, 0.0));
+        previousPixel = 0;
+        if (previousClip.w <= 0.000001)
+        {
+            return false;
+        }
+        const float2 previousUv = previousClip.xy / previousClip.w * float2(0.5, -0.5) + 0.5;
+        previousPixel = previousUv * float2(screenDims) - 0.5;
+        return all(previousPixel >= 0) && all(previousPixel <= float2(screenDims - 1));
     }
 
-
-    // Returns true if the previous pixel location is within @screenDims bounds
-    // AND the current pixel location is cloud visible.
-    bool GetReprojectedPixelLoc(uint2 pixelLoc, uint2 screenDims, inout uint2 prevPixelLocOut)
+    float4 SampleHistory(uint textureIndex, float2 pixel, uint2 dims)
     {
-        // Get the current clipSpace position.
-        const float2 pixelUV = float2(pixelLoc)/float2(screenDims);
-        const float zDepth = m_depthStencilTexture.Load(uint3(pixelLoc, 0)).r;
-        const float3 pixelPosWS = WorldPositionFromDepthBuffer(pixelUV, zDepth).xyz;
-
-        // Use the previous camera view-projection matrix to calculate screen pixel from
-        // world position.
-        const float4 clipPosPrev = mul(ViewSrg::m_viewProjectionPrevMatrix, float4(pixelPosWS, 1.0));
-        const float3 ndcPosPrev = clipPosPrev.xyz / clipPosPrev.w;
-        float2 uvPrev = (ndcPosPrev.xy + float2(1.0, -1.0)) * float2(0.5, -0.5);
-        const float2 prevPixLoc = float2(screenDims) * uvPrev + float2(0.5, 0.5);
-
-        prevPixelLocOut.x = clamp(prevPixLoc.x, 0, screenDims.x - 1);
-        prevPixelLocOut.y = clamp(prevPixLoc.y, 0, screenDims.y - 1);
-
-        const bool isInBounds = (prevPixLoc.x >= 0.0) && (prevPixLoc.x < screenDims.x) &&
-               (prevPixLoc.y >= 0.0) && (prevPixLoc.y < screenDims.y);
-        return isInBounds && (zDepth == 0.00);
+        const uint2 p0 = uint2(floor(pixel));
+        const uint2 p1 = min(p0 + 1, dims - 1);
+        const float2 fraction = frac(pixel);
+        return lerp(
+            lerp(m_cloudscapeTexture[textureIndex][p0],
+                 m_cloudscapeTexture[textureIndex][uint2(p1.x, p0.y)], fraction.x),
+            lerp(m_cloudscapeTexture[textureIndex][uint2(p0.x, p1.y)],
+                 m_cloudscapeTexture[textureIndex][p1], fraction.x), fraction.y);
     }
 
 }
@@ -141,25 +110,20 @@ void MainCS(uint3 thread_id: SV_DispatchThreadID)
         return;
     }
 
-    // Determine if this is the raymarched pixel.
-    if (PassSrg::IsRayMarchedPixel(pixelLoc))
+    const uint2 samplePixel = PassSrg::GetRayMarchedPixelLocation(pixelLoc, texDims);
+    if (all(pixelLoc == samplePixel))
     {
         return;
     }
-
-    const uint currentTexIndex = PassSrg::GetOutputTextureIndex();
-    uint previousTexIndex = 1 - currentTexIndex;
-    
-    // The moment of truth, reprojection.
-    uint2 prevPixelLoc = 0 ;
-    if (!PassSrg::GetReprojectedPixelLoc(pixelLoc, texDims, prevPixelLoc))
+    const uint currentIndex = PassSrg::GetOutputTextureIndex();
+    const float4 currentSample = PassSrg::m_cloudscapeTexture[currentIndex][samplePixel];
+    float2 previousPixel;
+    float4 result = currentSample;
+    if (PassSrg::m_historyValid != 0 && PassSrg::GetPreviousPixel(pixelLoc, texDims, previousPixel))
     {
-        // Either the previous pixel location is out of bounds or the current pixel is blocked
-        // by an object.
-        prevPixelLoc = PassSrg::GetRayMarchedPixelLocation(pixelLoc);
-        previousTexIndex = currentTexIndex;
+        // A bounded history weight follows changing weather and moving clouds;
+        // bilinear sampling avoids nearest-neighbour trails during camera motion.
+        result = lerp(currentSample, PassSrg::SampleHistory(1 - currentIndex, previousPixel, texDims), 0.9);
     }
-
-    PassSrg::m_cloudscapeTexture[currentTexIndex][pixelLoc] = PassSrg::m_cloudscapeTexture[previousTexIndex][prevPixelLoc];
-} 
-
+    PassSrg::m_cloudscapeTexture[currentIndex][pixelLoc] = result;
+}

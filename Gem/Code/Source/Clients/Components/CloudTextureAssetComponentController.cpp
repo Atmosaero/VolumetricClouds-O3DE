@@ -87,6 +87,7 @@ namespace VolumetricClouds
         void CloudTextureAssetComponentController::Activate(AZ::EntityId entityId)
         {
             m_entityId = entityId;
+            AZ::TickBus::Handler::BusConnect();
             AZ::TransformNotificationBus::Handler::BusConnect(entityId);
             CloudTextureProviderRequestBus::Handler::BusConnect(entityId);
 
@@ -100,6 +101,8 @@ namespace VolumetricClouds
 
         void CloudTextureAssetComponentController::Deactivate()
         {
+            AZ::TickBus::Handler::BusDisconnect();
+            m_textureUpdatePending = false;
             AZ::Data::AssetBus::Handler::BusDisconnect();
             CloudTextureProviderRequestBus::Handler::BusDisconnect();
             AZ::TransformNotificationBus::Handler::BusDisconnect();
@@ -109,6 +112,8 @@ namespace VolumetricClouds
                 m_debugViewerFeatureProcessor->RemoveCloudTextureInstance(m_entityId);
             }
             
+            m_debugViewerFeatureProcessor = nullptr;
+            m_cloudTextureImage.reset();
             m_entityId = AZ::EntityId(AZ::EntityId::InvalidEntityId);
         }
 
@@ -126,6 +131,25 @@ namespace VolumetricClouds
         void CloudTextureAssetComponentController::OnConfigurationChanged()
         {
 
+            if (!m_entityId.IsValid())
+            {
+                m_prevConfiguration = m_configuration;
+                return;
+            }
+            if (m_prevConfiguration.m_cloudTextureAsset.GetId() != m_configuration.m_cloudTextureAsset.GetId())
+            {
+                AZ::Data::AssetBus::Handler::BusDisconnect();
+                m_cloudTextureImage.reset();
+                m_textureUpdatePending = false;
+                CloudTextureProviderNotificationBus::Event(m_entityId,
+                    &CloudTextureProviderNotificationBus::Handler::OnCloudTextureImageReady, m_cloudTextureImage);
+                if (m_configuration.m_cloudTextureAsset.GetId().IsValid())
+                {
+                    AZ::Data::AssetBus::Handler::BusConnect(m_configuration.m_cloudTextureAsset.GetId());
+                    m_configuration.m_cloudTextureAsset.QueueLoad();
+                    m_textureUpdatePending = m_configuration.m_cloudTextureAsset.IsReady();
+                }
+            }
             if (m_prevConfiguration.m_presentationData != m_configuration.m_presentationData)
             {
                 if (m_configuration.m_presentationData.IsHidden())
@@ -167,7 +191,11 @@ namespace VolumetricClouds
             auto scenePtr = AZ::RPI::Scene::GetSceneForEntityId(m_entityId);
             if (scenePtr)
             {
-                m_debugViewerFeatureProcessor = scenePtr->EnableFeatureProcessor<CloudTexturesDebugViewerFeatureProcessor>();
+                m_debugViewerFeatureProcessor = scenePtr->GetFeatureProcessor<CloudTexturesDebugViewerFeatureProcessor>();
+                if (!m_debugViewerFeatureProcessor)
+                {
+                    m_debugViewerFeatureProcessor = scenePtr->EnableFeatureProcessor<CloudTexturesDebugViewerFeatureProcessor>();
+                }
             }
             AZ_Error(LogName, !!m_debugViewerFeatureProcessor, "CloudTextureComputeComponentController failed to enable CloudTexturesDebugViewerFeatureProcessor!");
             return m_debugViewerFeatureProcessor;
@@ -179,23 +207,29 @@ namespace VolumetricClouds
             {
                 AZ_Info(LogName, "The cloud texture asset is ready: %s", asset.GetHint().c_str());
                 m_configuration.m_cloudTextureAsset = asset;
-                auto updateTexture = [this]()
+                m_textureUpdatePending = true;
+            }
+        }
+
+        void CloudTextureAssetComponentController::OnTick(float, AZ::ScriptTimePoint)
+        {
+            if (!m_textureUpdatePending || !m_configuration.m_cloudTextureAsset.IsReady())
+            {
+                return;
+            }
+            m_textureUpdatePending = false;
+            m_cloudTextureImage = AZ::RPI::StreamingImage::FindOrCreate(m_configuration.m_cloudTextureAsset);
+            CloudTextureProviderNotificationBus::Event(m_entityId,
+                &CloudTextureProviderNotificationBus::Handler::OnCloudTextureImageReady, m_cloudTextureImage);
+            if (!m_configuration.m_presentationData.IsHidden() && !m_debugViewerFeatureProcessor)
+            {
+                AZ::Transform transform = AZ::Transform::CreateIdentity();
+                AZ::TransformBus::EventResult(transform, m_entityId, &AZ::TransformBus::Events::GetWorldTM);
+                if (auto* viewer = GetDebugViewerFeatureProcessor())
                 {
-                    m_cloudTextureImage = AZ::RPI::StreamingImage::FindOrCreate(m_configuration.m_cloudTextureAsset);
-
-                    CloudTextureProviderNotificationBus::Event(m_entityId, &CloudTextureProviderNotificationBus::Handler::OnCloudTextureImageReady, m_cloudTextureImage);
-
-                    if (!m_configuration.m_presentationData.IsHidden() && !m_debugViewerFeatureProcessor)
-                    {
-                        AZ::Transform transform = AZ::Transform::CreateIdentity();
-                        AZ::TransformBus::EventResult(transform, m_entityId, &AZ::TransformBus::Events::GetWorldTM);
-                        auto debugViewerProcessor = GetDebugViewerFeatureProcessor();
-                        debugViewerProcessor->AddCloudTextureInstance(m_entityId, m_cloudTextureImage, transform, m_configuration.m_presentationData);
-                    }
-
-                };
-                AZ::TickBus::QueueFunction(AZStd::move(updateTexture));
-            } 
+                    viewer->AddCloudTextureInstance(m_entityId, m_cloudTextureImage, transform, m_configuration.m_presentationData);
+                }
+            }
         }
 
         ////////////////////////////////////////////////////////////////////////
