@@ -22,6 +22,8 @@ namespace VolumetricClouds
         AZ_TYPE_INFO_WITH_NAME_DECL(CloudMaterialProperties);
         AZ_RTTI_NO_TYPE_INFO_DECL();
 
+        virtual ~CloudMaterialProperties() = default;
+
         static void Reflect(AZ::ReflectContext* reflection);
 
         bool operator==(const CloudMaterialProperties& rhs) const;

@@ -29,6 +29,8 @@ namespace VolumetricClouds
         AZ_TYPE_INFO_WITH_NAME_DECL(CloudTextureComputeData);
         AZ_RTTI_NO_TYPE_INFO_DECL();
 
+        virtual ~CloudTextureComputeData() = default;
+
         static void Reflect(AZ::ReflectContext* reflection);
 
         bool operator==(const CloudTextureComputeData& rhs) const;

@@ -16,11 +16,14 @@
 #include <VolumetricClouds/CloudTextureProviderBus.h>
 #include <Renderer/CloudTexturePresentationData.h>
 
+namespace AZ::RPI
+{
+    class Scene;
+    class Shader;
+}
+
 namespace VolumetricClouds
 {
-    class AZ::RPI::Scene;
-    class AZ::RPI::Shader;
-
     class CloudTextureComputePass;
 
     class CloudTexturesDebugViewerFeatureProcessor final

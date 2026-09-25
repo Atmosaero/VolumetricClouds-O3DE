@@ -22,7 +22,10 @@
 #include <Renderer/Passes/CloudscapeComputePass.h>
 #include <Renderer/Passes/CloudscapeRasterPass.h>
 
-class AZ::RPI::Scene;
+namespace AZ::RPI
+{
+    class Scene;
+}
 
 namespace VolumetricClouds
 {

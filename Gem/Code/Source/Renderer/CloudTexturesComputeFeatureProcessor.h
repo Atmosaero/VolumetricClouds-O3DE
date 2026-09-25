@@ -12,10 +12,13 @@
 
 #include "CloudTextureComputePipeline.h"
 
+namespace AZ::RPI
+{
+    class Scene;
+}
+
 namespace VolumetricClouds
 {
-    class AZ::RPI::Scene;
-
     class CloudTexturesComputeFeatureProcessor final
         : public AZ::RPI::FeatureProcessor
     {

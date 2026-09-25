@@ -30,6 +30,8 @@ namespace VolumetricClouds
         AZ_TYPE_INFO_WITH_NAME_DECL(CloudTexturePresentationData);
         AZ_RTTI_NO_TYPE_INFO_DECL();
 
+        virtual ~CloudTexturePresentationData() = default;
+
         static void Reflect(AZ::ReflectContext* reflection);
 
         bool operator==(const CloudTexturePresentationData& rhs) const;
